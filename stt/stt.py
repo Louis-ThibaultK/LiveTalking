@@ -123,7 +123,7 @@ class STT():
         return config
 
     async def recognize(
-        self, *, buffer, language: str | None = None
+        self, buffer, language: str | None = None
     ) -> any:
         config = self._sanitize_options(language=language)
 

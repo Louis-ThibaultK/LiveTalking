@@ -57,8 +57,7 @@ opt = None
 model = None
 avatar = None
 status = False
-# 创建队列
-message_queue = asyncio.Queue()
+
 
 
 # def llm_response(message):
@@ -210,7 +209,7 @@ async def human(request):
             {"code": 0, "data":"ok"}
         ),
     )
-async def Speaking(request): 
+async def Speaking(request, message_queue): 
     params = await request.json()
     global status
     sessionid = params.get('sessionid',0)
@@ -336,11 +335,12 @@ async def run(push_url,sessionid):
 async def process_stream(message_queue, m_stt, audio_buffer, nerfreals):
     try:
         print("Receiving stream...")
+        # asyncio.run_coroutine_threadsafe(message_queue.get(), loop)
         msg = await message_queue.get()
         print("waiting finished")
     finally:
         # 调用语音识别
-        text = await m_stt.recognize(audio_buffer.get_data(), None)
+        text = await m_stt.recognize(buffer = audio_buffer.get_data(), language = "auto")
         sessionid = 0
         if msg == 'echo':
             nerfreals[sessionid].put_msg_txt(text)
@@ -349,7 +349,7 @@ async def process_stream(message_queue, m_stt, audio_buffer, nerfreals):
                 None, llm_response, text, nerfreals[sessionid]
             )
 
-async def fetch_stream(pull_url):
+async def fetch_stream(pull_url, message_queue):
     pc = RTCPeerConnection()
     pcs.add(pc)
     @pc.on("connectionstatechange")
@@ -398,7 +398,7 @@ async def fetch_stream(pull_url):
         ## TODO
         # noise_filter=m_noise_filter,
     )
-    task = asyncio.create_task(process_stream(message_queue, m_stt, audio_buffer, nerfreals))                    
+    task = asyncio.create_task(process_stream(message_queue, m_stt, audio_buffer, nerfreals) )                   
         #nerfreals[sessionid].put_msg_txt(res)
 
 
@@ -605,6 +605,8 @@ if __name__ == '__main__':
         rendthrd = Thread(target=nerfreals[0].render,args=(thread_quit,))
         rendthrd.start()
 
+    # 创建队列
+    message_queue = asyncio.Queue()
     #############################################################################
     appasync = web.Application()
     appasync.on_shutdown.append(on_shutdown)
@@ -613,7 +615,7 @@ if __name__ == '__main__':
     appasync.router.add_post("/humanaudio", humanaudio)
     appasync.router.add_post("/set_audiotype", set_audiotype)
     appasync.router.add_post("/record", record)
-    appasync.router.add_post("/is_speaking", Speaking)
+    appasync.router.add_post("/is_speaking", lambda request: Speaking(request, message_queue))
     appasync.router.add_static('/',path='web')
 
     # Configure default CORS settings.
@@ -647,7 +649,7 @@ if __name__ == '__main__':
                 if k!=0:
                     push_url = opt.push_url+str(k)
                 loop.run_until_complete(run(push_url,k))
-                loop.run_until_complete(fetch_stream(pull_url))
+                loop.run_until_complete(fetch_stream(pull_url, message_queue))
         loop.run_forever()    
     #Thread(target=run_server, args=(web.AppRunner(appasync),)).start()
     run_server(web.AppRunner(appasync))
