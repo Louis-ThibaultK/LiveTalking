@@ -337,6 +337,7 @@ async def process_stream(message_queue, m_stt, audio_buffer, nerfreals):
     try:
         print("Receiving stream...")
         msg = await message_queue.get()
+        print("waiting finished")
     finally:
         # 调用语音识别
         text = await m_stt.recognize(audio_buffer.get_data(), None)
@@ -395,6 +396,7 @@ async def fetch_stream(pull_url):
         ## TODO
         # noise_filter=m_noise_filter,
     )
+    global message_queue
     task = asyncio.create_task(process_stream(message_queue, m_stt, audio_buffer, nerfreals))                    
         #nerfreals[sessionid].put_msg_txt(res)
 
@@ -610,7 +612,7 @@ if __name__ == '__main__':
     appasync.router.add_post("/humanaudio", humanaudio)
     appasync.router.add_post("/set_audiotype", set_audiotype)
     appasync.router.add_post("/record", record)
-    appasync.router.add_post("/is_speaking", is_speaking)
+    appasync.router.add_post("/is_speaking", Speaking)
     appasync.router.add_static('/',path='web')
 
     # Configure default CORS settings.
