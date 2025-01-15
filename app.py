@@ -220,8 +220,10 @@ async def Speaking(request, message_queue):
     else:
         status = False
         if params['type']=='echo':
+            # asyncio.run_coroutine_threadsafe(message_queue.put("echo"), loop)
             message_queue.put("echo")
         elif params['type'] == 'chat':
+            # asyncio.run_coroutine_threadsafe(message_queue.put("chat"), loop)
             message_queue.put('chat')
 
     return web.Response(
@@ -333,21 +335,22 @@ async def run(push_url,sessionid):
     await pc.setRemoteDescription(RTCSessionDescription(sdp=answer,type='answer'))
 
 async def process_stream(message_queue, m_stt, audio_buffer, nerfreals):
-    try:
-        print("Receiving stream...")
-        # asyncio.run_coroutine_threadsafe(message_queue.get(), loop)
-        msg = await message_queue.get()
-        print("waiting finished")
-    finally:
-        # 调用语音识别
-        text = await m_stt.recognize(buffer = audio_buffer.get_data(), language = "auto")
-        sessionid = 0
-        if msg == 'echo':
-            nerfreals[sessionid].put_msg_txt(text)
-        elif msg == 'chat':
-            res = await asyncio.get_event_loop().run_in_executor(
-                None, llm_response, text, nerfreals[sessionid]
-            )
+    while True:
+        try:
+            print("Receiving stream...")
+            # asyncio.run_coroutine_threadsafe(message_queue.get(), loop)
+            msg = await message_queue.get()
+            print("waiting finished")
+        finally:
+            # 调用语音识别
+            text = await m_stt.recognize(buffer = audio_buffer.get_data(), language = "auto")
+            sessionid = 0
+            if msg == 'echo':
+                nerfreals[sessionid].put_msg_txt(text)
+            elif msg == 'chat':
+                res = await asyncio.get_event_loop().run_in_executor(
+                    None, llm_response, text, nerfreals[sessionid]
+                )
 
 async def fetch_stream(pull_url, message_queue):
     pc = RTCPeerConnection()
@@ -398,7 +401,8 @@ async def fetch_stream(pull_url, message_queue):
         ## TODO
         # noise_filter=m_noise_filter,
     )
-    task = asyncio.create_task(process_stream(message_queue, m_stt, audio_buffer, nerfreals) )                   
+    process_stream(message_queue, m_stt, audio_buffer, nerfreals)
+    # task = asyncio.create_task(process_stream(message_queue, m_stt, audio_buffer, nerfreals) )                   
         #nerfreals[sessionid].put_msg_txt(res)
 
 
@@ -636,6 +640,9 @@ if __name__ == '__main__':
     elif opt.transport=='rtcpush':
         pagename='rtcpushapi.html'
     print('start http server; http://<serverip>:'+str(opt.listenport)+'/'+pagename)
+    pull_url = opt.pull_url
+    asyncio.create_task(fetch_stream(pull_url, message_queue)) 
+
     def run_server(runner):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -645,12 +652,13 @@ if __name__ == '__main__':
         if opt.transport=='rtcpush':
             for k in range(opt.max_session):
                 push_url = opt.push_url
-                pull_url = opt.pull_url
+                
                 if k!=0:
                     push_url = opt.push_url+str(k)
                 loop.run_until_complete(run(push_url,k))
-                loop.run_until_complete(fetch_stream(pull_url, message_queue))
-        loop.run_forever()    
+                loop.run_until_complete(fetch_stream(pull_url, message_queue, asyncio.get_event_loop()))
+        loop.run_forever()   
+    
     #Thread(target=run_server, args=(web.AppRunner(appasync),)).start()
     run_server(web.AppRunner(appasync))
 
