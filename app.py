@@ -16,6 +16,7 @@
 ###############################################################################
 
 # server.py
+import queue
 from flask import Flask, render_template,send_from_directory,request, jsonify
 from flask_sockets import Sockets
 import base64
@@ -37,6 +38,7 @@ import aiohttp_cors
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.rtcrtpsender import RTCRtpSender
 from webrtc import HumanPlayer
+from webrtc import AudioBuffer
 
 import argparse
 import random
@@ -45,6 +47,8 @@ import shutil
 import asyncio
 import torch
 
+import stt.stt 
+
 
 app = Flask(__name__)
 #sockets = Sockets(app)
@@ -52,6 +56,9 @@ nerfreals = {}
 opt = None
 model = None
 avatar = None
+status = False
+# 创建队列
+message_queue = asyncio.Queue()
 
 
 # def llm_response(message):
@@ -203,6 +210,30 @@ async def human(request):
             {"code": 0, "data":"ok"}
         ),
     )
+async def Speaking(request): 
+    params = await request.json()
+
+    sessionid = params.get('sessionid',0)
+    if params.get('interrupt'):
+        nerfreals[sessionid].flush_talk()
+    if params['status'] == 'start':
+        global status
+        status = True
+    else:
+        global status
+        status = False
+        if params['type']=='echo':
+            message_queue.put("echo")
+        elif params['type'] == 'chat':
+            message_queue.put('chat')
+
+    return web.Response(
+        content_type="application/json",
+        text=json.dumps(
+            {"code": 0, "data":"ok"}
+        ),
+    ) 
+
 
 async def humanaudio(request):
     try:
@@ -303,6 +334,71 @@ async def run(push_url,sessionid):
     await pc.setLocalDescription(await pc.createOffer())
     answer = await post(push_url,pc.localDescription.sdp)
     await pc.setRemoteDescription(RTCSessionDescription(sdp=answer,type='answer'))
+
+async def fetch_stream(pull_url):
+    pc = RTCPeerConnection()
+    pcs.add(pc)
+    @pc.on("connectionstatechange")
+    async def on_connectionstatechange():
+        print("Connection state is %s" % pc.connectionState)
+        if pc.connectionState == "failed":
+            await pc.close()
+            pcs.discard(pc)
+     
+     # 临时音频处理
+    audio_buffer = AudioBuffer()
+    status = False
+
+    async def on_track(track):
+        nonlocal status
+        if track.kind == "audio":
+            print("Audio track received")
+
+            @track.on("frame")
+            def on_frame(frame):
+                # 将音频帧的数据写入缓冲区
+                if status:
+                    audio_buffer.write(frame.data)
+        elif track.kind == "video":
+            print("Video track received (ignored)")
+
+    pc.on("track", on_track)
+
+    pc.addTransceiver("audio", direction="recvonly")
+    # 创建 SDP Offer
+    offer = await pc.createOffer()
+    print("offer:", offer)
+    await pc.setLocalDescription(offer)
+
+    # 向 WHEP 服务端发送 SDP Offer
+    answer = await post(pull_url, pc.localDescription.sdp)
+
+    m_stt = stt.STT(
+        base_url=ASR_URL,
+        model=ASR_MODEL,
+        language=ASR_LANG,
+        api_key=ASR_KEY,
+
+        ## TODO
+        # noise_filter=m_noise_filter,
+    )
+
+    # 等待音频流接收
+    try:
+        print("Receiving stream...")
+        msg = await message_queue.get()
+    finally:
+
+        # 调用语音识别
+        text = await m_stt.recognize(audio_buffer.get_data())
+        sessionid = 0
+        if msg == 'echo':
+            nerfreals[sessionid].put_msg_txt(text)
+        elif msg=='chat':
+            res=await asyncio.get_event_loop().run_in_executor(None, llm_response, text, nerfreals[sessionid])                         
+        #nerfreals[sessionid].put_msg_txt(res)
+
+
 ##########################################
 # os.environ['MKL_SERVICE_FORCE_INTEL'] = '1'
 # os.environ['MULTIPROCESSING_METHOD'] = 'forkserver'                                                    
@@ -440,10 +536,16 @@ if __name__ == '__main__':
     parser.add_argument('--model', type=str, default='ernerf') #musetalk wav2lip
 
     parser.add_argument('--transport', type=str, default='rtcpush') #rtmp webrtc rtcpush
-    parser.add_argument('--push_url', type=str, default='http://localhost:1985/rtc/v1/whip/?app=live&stream=livestream') #rtmp://localhost/live/livestream
+    parser.add_argument('--push_url', type=str, default='http://106.39.219.223:1985/rtc/v1/whip/?app=live&stream=livestream') #rtmp://localhost/live/livestream
+    parser.add_argument('--pull_url', type=str, default='http://106.39.239.223:1985/rtc/v1/whep/?app=live&stream=livestream1')
 
     parser.add_argument('--max_session', type=int, default=1)  #multi session count
     parser.add_argument('--listenport', type=int, default=8010)
+    # asr
+    ASR_URL = os.getenv('ASR_URL')
+    ASR_MODEL = os.getenv('ASR_MODEL')
+    ASR_LANG = os.getenv('ASR_LANG')
+    ASR_KEY = os.getenv('ASR_KEY')
 
     opt = parser.parse_args()
     #app.config.from_object(opt)
@@ -534,9 +636,11 @@ if __name__ == '__main__':
         if opt.transport=='rtcpush':
             for k in range(opt.max_session):
                 push_url = opt.push_url
+                pull_url = opt.pull_url
                 if k!=0:
                     push_url = opt.push_url+str(k)
                 loop.run_until_complete(run(push_url,k))
+                loop.run_until_complete(fetch_stream(pull_url))
         loop.run_forever()    
     #Thread(target=run_server, args=(web.AppRunner(appasync),)).start()
     run_server(web.AppRunner(appasync))

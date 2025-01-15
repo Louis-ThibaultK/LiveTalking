@@ -16,11 +16,13 @@
 ###############################################################################
 
 import asyncio
+import io
 import json
 import logging
 import threading
 import time
 from typing import Tuple, Dict, Optional, Set, Union
+import wave
 from av.frame import Frame
 from av.packet import Packet
 from av import AudioFrame
@@ -154,6 +156,22 @@ def player_worker_thread(
 ):
     container.render(quit_event,loop,audio_track,video_track)
 
+
+class AudioBuffer:
+    """
+    将接收到的音频数据保存到缓冲区。
+    """
+    def __init__(self):
+        self.buffer = bytearray()
+
+    def write(self, data):
+        self.buffer.extend(data)
+
+    def get_data(self):
+        return self.buffer
+    
+    
+
 class HumanPlayer:
 
     def __init__(
@@ -220,3 +238,4 @@ class HumanPlayer:
 
     def __log_debug(self, msg: str, *args) -> None:
         logger.debug(f"HumanPlayer {msg}", *args)
+
