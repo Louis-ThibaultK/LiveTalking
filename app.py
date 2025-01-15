@@ -212,7 +212,7 @@ async def human(request):
     )
 async def Speaking(request): 
     params = await request.json()
-    global status
+    global status, message_queue
     sessionid = params.get('sessionid',0)
     if params.get('interrupt'):
         nerfreals[sessionid].flush_talk()
@@ -320,7 +320,7 @@ async def run(push_url,sessionid):
 
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
-        print("Connection state is %s" % pc.connectionState)
+        print("push Connection state is %s" % pc.connectionState)
         if pc.connectionState == "failed":
             await pc.close()
             pcs.discard(pc)
@@ -354,7 +354,7 @@ async def fetch_stream(pull_url):
     pcs.add(pc)
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
-        print("Connection state is %s" % pc.connectionState)
+        print("pull Connection state is %s" % pc.connectionState)
         if pc.connectionState == "failed":
             await pc.close()
             pcs.discard(pc)
@@ -397,6 +397,7 @@ async def fetch_stream(pull_url):
         # noise_filter=m_noise_filter,
     )
     global message_queue
+    print("hahahaha")
     task = asyncio.create_task(process_stream(message_queue, m_stt, audio_buffer, nerfreals))                    
         #nerfreals[sessionid].put_msg_txt(res)
 
