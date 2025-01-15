@@ -212,15 +212,13 @@ async def human(request):
     )
 async def Speaking(request): 
     params = await request.json()
-
+    global status
     sessionid = params.get('sessionid',0)
     if params.get('interrupt'):
         nerfreals[sessionid].flush_talk()
     if params['status'] == 'start':
-        global status
         status = True
     else:
-        global status
         status = False
         if params['type']=='echo':
             message_queue.put("echo")
@@ -335,6 +333,21 @@ async def run(push_url,sessionid):
     answer = await post(push_url,pc.localDescription.sdp)
     await pc.setRemoteDescription(RTCSessionDescription(sdp=answer,type='answer'))
 
+async def process_stream(message_queue, m_stt, audio_buffer, nerfreals):
+    try:
+        print("Receiving stream...")
+        msg = await message_queue.get()
+    finally:
+        # 调用语音识别
+        text = await m_stt.recognize(audio_buffer.get_data(), None)
+        sessionid = 0
+        if msg == 'echo':
+            nerfreals[sessionid].put_msg_txt(text)
+        elif msg == 'chat':
+            res = await asyncio.get_event_loop().run_in_executor(
+                None, llm_response, text, nerfreals[sessionid]
+            )
+
 async def fetch_stream(pull_url):
     pc = RTCPeerConnection()
     pcs.add(pc)
@@ -382,20 +395,7 @@ async def fetch_stream(pull_url):
         ## TODO
         # noise_filter=m_noise_filter,
     )
-
-    # 等待音频流接收
-    try:
-        print("Receiving stream...")
-        msg = await message_queue.get()
-    finally:
-
-        # 调用语音识别
-        text = await m_stt.recognize(audio_buffer.get_data())
-        sessionid = 0
-        if msg == 'echo':
-            nerfreals[sessionid].put_msg_txt(text)
-        elif msg=='chat':
-            res=await asyncio.get_event_loop().run_in_executor(None, llm_response, text, nerfreals[sessionid])                         
+    task = asyncio.create_task(process_stream(message_queue, m_stt, audio_buffer, nerfreals))                    
         #nerfreals[sessionid].put_msg_txt(res)
 
 
@@ -546,6 +546,10 @@ if __name__ == '__main__':
     ASR_MODEL = os.getenv('ASR_MODEL')
     ASR_LANG = os.getenv('ASR_LANG')
     ASR_KEY = os.getenv('ASR_KEY')
+    ASR_URL="http://10.218.127.251:3000"
+    ASR_MODEL="SenseVoice"
+    ASR_LANG="auto"
+    ASR_KEY="*********"
 
     opt = parser.parse_args()
     #app.config.from_object(opt)
