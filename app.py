@@ -212,7 +212,7 @@ async def human(request):
     )
 async def Speaking(request): 
     params = await request.json()
-    global status, message_queue
+    global status
     sessionid = params.get('sessionid',0)
     if params.get('interrupt'):
         nerfreals[sessionid].flush_talk()
@@ -386,6 +386,8 @@ async def fetch_stream(pull_url):
 
     # 向 WHEP 服务端发送 SDP Offer
     answer = await post(pull_url, pc.localDescription.sdp)
+    print("answer:", answer)
+    await pc.setRemoteDescription(RTCSessionDescription(sdp=answer,type='answer'))
 
     m_stt = stt.STT(
         base_url=ASR_URL,
@@ -396,8 +398,6 @@ async def fetch_stream(pull_url):
         ## TODO
         # noise_filter=m_noise_filter,
     )
-    global message_queue
-    print("hahahaha")
     task = asyncio.create_task(process_stream(message_queue, m_stt, audio_buffer, nerfreals))                    
         #nerfreals[sessionid].put_msg_txt(res)
 
