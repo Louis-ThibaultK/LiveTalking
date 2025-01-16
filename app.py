@@ -57,6 +57,7 @@ opt = None
 model = None
 avatar = None
 status = False
+message_queue = None
 
 
 
@@ -209,9 +210,9 @@ async def human(request):
             {"code": 0, "data":"ok"}
         ),
     )
-async def Speaking(request, message_queue): 
+async def Speaking(request): 
     params = await request.json()
-    global status
+    global status, message_queue
     sessionid = params.get('sessionid',0)
     if params.get('interrupt'):
         nerfreals[sessionid].flush_talk()
@@ -402,7 +403,7 @@ async def fetch_stream(pull_url, message_queue, loop):
         # noise_filter=m_noise_filter,
     )
     # process_stream(message_queue, m_stt, audio_buffer, nerfreals)
-    task = loop.create_task(process_stream(message_queue, m_stt, audio_buffer, nerfreals, loop) )                   
+    task = loop.create_task(process_stream(message_queue, m_stt, audio_buffer, nerfreals) )                   
         #nerfreals[sessionid].put_msg_txt(res)
 
 
@@ -544,7 +545,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--transport', type=str, default='rtcpush') #rtmp webrtc rtcpush
     parser.add_argument('--push_url', type=str, default='http://106.39.219.223:1985/rtc/v1/whip/?app=live&stream=livestream') #rtmp://localhost/live/livestream
-    parser.add_argument('--pull_url', type=str, default='http://106.39.239.223:1985/rtc/v1/whep/?app=live&stream=livestream1')
+    parser.add_argument('--pull_url', type=str, default='http://106.39.219.223:1985/rtc/v1/whep/?app=live&stream=livestream1')
 
     parser.add_argument('--max_session', type=int, default=1)  #multi session count
     parser.add_argument('--listenport', type=int, default=8010)
@@ -608,9 +609,7 @@ if __name__ == '__main__':
         nerfreals[0] = build_nerfreal(0)
         rendthrd = Thread(target=nerfreals[0].render,args=(thread_quit,))
         rendthrd.start()
-
-    # 创建队列
-    message_queue = asyncio.Queue()
+    
     #############################################################################
     appasync = web.Application()
     appasync.on_shutdown.append(on_shutdown)
@@ -619,7 +618,7 @@ if __name__ == '__main__':
     appasync.router.add_post("/humanaudio", humanaudio)
     appasync.router.add_post("/set_audiotype", set_audiotype)
     appasync.router.add_post("/record", record)
-    appasync.router.add_post("/is_speaking", lambda request: Speaking(request, message_queue))
+    appasync.router.add_post("/is_speaking", Speaking)
     appasync.router.add_static('/',path='web')
 
     # Configure default CORS settings.
@@ -644,6 +643,8 @@ if __name__ == '__main__':
     def run_server(runner):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        global message_queue
+        message_queue = asyncio.Queue()
         loop.run_until_complete(runner.setup())
         site = web.TCPSite(runner, '0.0.0.0', opt.listenport)
         loop.run_until_complete(site.start())
