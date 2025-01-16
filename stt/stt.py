@@ -141,7 +141,7 @@ class STT():
             wav.setsampwidth(2)  # 16-bit
             wav.setframerate(buffer.sample_rate)
             wav.writeframes(buffer.get_data())
-
+            
         resp = await self._client.audio.transcriptions.create(
             file=("my_file.wav", io_buffer.getvalue(), "audio/wav"),
             model=self._opts.model,

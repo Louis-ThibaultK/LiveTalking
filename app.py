@@ -17,6 +17,7 @@
 
 # server.py
 import queue
+import wave
 from flask import Flask, render_template,send_from_directory,request, jsonify
 from flask_sockets import Sockets
 import base64
@@ -336,6 +337,15 @@ async def run(push_url,sessionid):
     answer = await post(push_url,pc.localDescription.sdp)
     await pc.setRemoteDescription(RTCSessionDescription(sdp=answer,type='answer'))
 
+async def save_audio_to_file(frames, filename):
+    with wave.open(filename, 'wb') as wf:
+        wf.setnchannels(1)  # Mono
+        wf.setsampwidth(2)  # 16-bit PCM
+        wf.setframerate(44100)  # Sample rate
+        for frame in frames:
+            wf.writeframes(frame.to_ndarray().tobytes())
+        print(f"Saved {len(frames)} audio frames to {filename}.")
+
 async def process_stream(message_queue, m_stt, audio_buffer, nerfreals):
     while True:
         try:
@@ -344,6 +354,8 @@ async def process_stream(message_queue, m_stt, audio_buffer, nerfreals):
             msg = await message_queue.get()
             print("waiting finished")
         finally:
+            # 保存音频数据到文件
+            await save_audio_to_file(audio_buffer.get_data(), "output.wav")
             # 调用语音识别
             text = await m_stt.recognize(buffer = audio_buffer, language = "auto")
             sessionid = 0
@@ -378,11 +390,11 @@ async def fetch_stream(pull_url, message_queue, loop):
                 if status:
                     audio_data = frame.to_ndarray()  # 获取 NumPy 数组
                     channels, samples = audio_data.shape
-                    print("track status:", status, channels, samples)
+                    print("track status:", status, channels, samples, frame.sample_rate)
                     audio_buffer.write(
                         audio_data.tobytes(),
-                        channels,   # 从帧对象提取通道数
-                        frame.sample_rate,  # 从帧对象提取采样率
+                        2,   # 从帧对象提取通道数
+                        48000,  # 从帧对象提取采样率
                         2  # 假设 16-bit，每个采样宽度为 2 字节
                     )
         elif track.kind == "video":
