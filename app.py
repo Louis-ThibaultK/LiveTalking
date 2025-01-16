@@ -366,16 +366,16 @@ async def fetch_stream(pull_url, message_queue, loop):
      
      # 临时音频处理
     audio_buffer = AudioBuffer()
-    status = False
 
     async def on_track(track):
-        nonlocal status
+        global status
         if track.kind == "audio":
             print("Audio track received")
 
-            @track.on("frame")
+            @track.on("frame", on_frame)
             def on_frame(frame):
                 # 将音频帧的数据写入缓冲区
+                print("frame status:", frame.channels, frame.sample_rate, status)
                 if status:
                     audio_buffer.write(
                         frame.data,
@@ -391,12 +391,10 @@ async def fetch_stream(pull_url, message_queue, loop):
     pc.addTransceiver("audio", direction="recvonly")
     # 创建 SDP Offer
     offer = await pc.createOffer()
-    print("offer:", offer)
     await pc.setLocalDescription(offer)
 
     # 向 WHEP 服务端发送 SDP Offer
     answer = await post(pull_url, pc.localDescription.sdp)
-    print("answer:", answer)
     await pc.setRemoteDescription(RTCSessionDescription(sdp=answer,type='answer'))
 
     m_stt = stt.STT(
