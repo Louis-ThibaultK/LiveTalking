@@ -47,8 +47,7 @@ import random
 import shutil
 import asyncio
 import torch
-
-import stt.stt 
+import requests
 
 
 app = Flask(__name__)
@@ -341,12 +340,26 @@ async def save_audio_to_file(frames, filename):
     with wave.open(filename, 'wb') as wf:
         wf.setnchannels(1)  # Mono
         wf.setsampwidth(2)  # 16-bit PCM
-        wf.setframerate(44100)  # Sample rate
-        for frame in frames:
-            wf.writeframes(frame.to_ndarray().tobytes())
+        wf.setframerate(48000)  # Sample rate
+        # for frame in frames:
+        wf.writeframes(frames)
         print(f"Saved {len(frames)} audio frames to {filename}.")
 
-async def process_stream(message_queue, m_stt, audio_buffer, nerfreals):
+async def sst_response():
+    url = "http://10.218.127.29:3000/transcribe"
+
+    payload = {'language': 'zn'}
+    files=[
+    ('audio_file',('output.wav',open('./output.wav','rb'),'audio/wav'))
+    ]
+    headers = {}
+
+    response = requests.request("POST", url, headers=headers, data=payload, files=files)
+    os.remove("./output.wav")
+    print("text:", response.text)
+    return response.textc
+
+async def process_stream(message_queue, audio_buffer, nerfreals):
     while True:
         try:
             print("Receiving stream...")
@@ -354,10 +367,10 @@ async def process_stream(message_queue, m_stt, audio_buffer, nerfreals):
             msg = await message_queue.get()
             print("waiting finished")
         finally:
-            # 保存音频数据到文件
+            # # 保存音频数据到文件
             await save_audio_to_file(audio_buffer.get_data(), "output.wav")
             # 调用语音识别
-            text = await m_stt.recognize(buffer = audio_buffer, language = "auto")
+            text = await sst_response()
             sessionid = 0
             if msg == 'echo':
                 nerfreals[sessionid].put_msg_txt(text)
@@ -412,18 +425,9 @@ async def fetch_stream(pull_url, message_queue, loop):
     answer = await post(pull_url, pc.localDescription.sdp)
     print("answer:", answer)
     await pc.setRemoteDescription(RTCSessionDescription(sdp=answer,type='answer'))
-
-    m_stt = stt.STT(
-        base_url=ASR_URL,
-        model=ASR_MODEL,
-        language=ASR_LANG,
-        api_key=ASR_KEY,
-
-        ## TODO
-        # noise_filter=m_noise_filter,
-    )
+    
     # process_stream(message_queue, m_stt, audio_buffer, nerfreals)
-    task = loop.create_task(process_stream(message_queue, m_stt, audio_buffer, nerfreals) )                   
+    task = loop.create_task(process_stream(message_queue, audio_buffer, nerfreals) )                   
         #nerfreals[sessionid].put_msg_txt(res)
 
 

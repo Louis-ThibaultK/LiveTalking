@@ -24,6 +24,7 @@ from dataclasses import dataclass
 import httpx
 
 import openai
+import requests
 
 from .models import WhisperModels, GroqAudioModels
 
@@ -141,7 +142,11 @@ class STT():
             wav.setsampwidth(2)  # 16-bit
             wav.setframerate(buffer.sample_rate)
             wav.writeframes(buffer.get_data())
-            
+        
+
+        url = "http://10.218.127.29:3000/transcribe"
+        payload = {'language': 'zn'}
+        
         resp = await self._client.audio.transcriptions.create(
             file=("my_file.wav", io_buffer.getvalue(), "audio/wav"),
             model=self._opts.model,
