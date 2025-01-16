@@ -345,7 +345,7 @@ async def process_stream(message_queue, m_stt, audio_buffer, nerfreals):
             print("waiting finished")
         finally:
             # 调用语音识别
-            text = await m_stt.recognize(buffer = audio_buffer.get_data(), language = "auto")
+            text = await m_stt.recognize(buffer = audio_buffer, language = "auto")
             sessionid = 0
             if msg == 'echo':
                 nerfreals[sessionid].put_msg_txt(text)
@@ -377,7 +377,12 @@ async def fetch_stream(pull_url, message_queue, loop):
             def on_frame(frame):
                 # 将音频帧的数据写入缓冲区
                 if status:
-                    audio_buffer.write(frame.data)
+                    audio_buffer.write(
+                        frame.data,
+                        frame.channels,   # 从帧对象提取通道数
+                        frame.sample_rate,  # 从帧对象提取采样率
+                        2  # 假设 16-bit，每个采样宽度为 2 字节
+                    )
         elif track.kind == "video":
             print("Video track received (ignored)")
 

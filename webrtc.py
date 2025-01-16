@@ -163,8 +163,18 @@ class AudioBuffer:
     """
     def __init__(self):
         self.buffer = bytearray()
+        self.num_channels = None
+        self.sample_rate = None
+        self.sample_width = None
 
-    def write(self, data):
+    def write(self, data, num_channels, sample_rate, sample_width):
+        if self.num_channels is None:
+            self.num_channels = num_channels
+        if self.sample_rate is None:
+            self.sample_rate = sample_rate
+        if self.sample_width is None:
+            self.sample_width = sample_width
+
         self.buffer.extend(data)
 
     def get_data(self):
