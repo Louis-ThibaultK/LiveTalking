@@ -376,11 +376,11 @@ async def fetch_stream(pull_url, message_queue, loop):
                 frame = await track.recv()
                 # 将音频帧的数据写入缓冲区
                 if status:
-                    print("track status:", status, len(frame))
+                    print("track status:", status, frame.samples * frame.layout.channels)
                     audio_buffer.write(
-                        frame,
-                        2,   # 从帧对象提取通道数
-                        48000,  # 从帧对象提取采样率
+                        frame.data,
+                        frame.layout.channels,   # 从帧对象提取通道数
+                        frame.sample_rate,  # 从帧对象提取采样率
                         2  # 假设 16-bit，每个采样宽度为 2 字节
                     )
         elif track.kind == "video":
