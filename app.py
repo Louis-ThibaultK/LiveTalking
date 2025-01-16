@@ -372,15 +372,15 @@ async def fetch_stream(pull_url, message_queue, loop):
         if track.kind == "audio":
             print("Audio track received")
 
-            @track.on("frame", on_frame)
-            def on_frame(frame):
+            while True:
+                frame = await track.recv()
                 # 将音频帧的数据写入缓冲区
-                print("frame status:", frame.channels, frame.sample_rate, status)
                 if status:
+                    print("track status:", status, len(frame))
                     audio_buffer.write(
-                        frame.data,
-                        frame.channels,   # 从帧对象提取通道数
-                        frame.sample_rate,  # 从帧对象提取采样率
+                        frame,
+                        2,   # 从帧对象提取通道数
+                        48000,  # 从帧对象提取采样率
                         2  # 假设 16-bit，每个采样宽度为 2 字节
                     )
         elif track.kind == "video":
@@ -391,10 +391,12 @@ async def fetch_stream(pull_url, message_queue, loop):
     pc.addTransceiver("audio", direction="recvonly")
     # 创建 SDP Offer
     offer = await pc.createOffer()
+    print("offer:", offer)
     await pc.setLocalDescription(offer)
 
     # 向 WHEP 服务端发送 SDP Offer
     answer = await post(pull_url, pc.localDescription.sdp)
+    print("answer:", answer)
     await pc.setRemoteDescription(RTCSessionDescription(sdp=answer,type='answer'))
 
     m_stt = stt.STT(
