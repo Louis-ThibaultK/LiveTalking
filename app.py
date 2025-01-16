@@ -58,6 +58,7 @@ model = None
 avatar = None
 status = False
 message_queue = None
+loop= None
 
 
 
@@ -212,7 +213,7 @@ async def human(request):
     )
 async def Speaking(request): 
     params = await request.json()
-    global status, message_queue
+    global status, message_queue, loop
     sessionid = params.get('sessionid',0)
     if params.get('interrupt'):
         nerfreals[sessionid].flush_talk()
@@ -221,11 +222,11 @@ async def Speaking(request):
     else:
         status = False
         if params['type']=='echo':
-            # asyncio.run_coroutine_threadsafe(message_queue.put("echo"), loop)
-            message_queue.put("echo")
+            asyncio.run_coroutine_threadsafe(message_queue.put("echo"), loop)
+            # message_queue.put("echo")
         elif params['type'] == 'chat':
-            # asyncio.run_coroutine_threadsafe(message_queue.put("chat"), loop)
-            message_queue.put('chat')
+            asyncio.run_coroutine_threadsafe(message_queue.put("chat"), loop)
+            # message_queue.put('chat')
 
     return web.Response(
         content_type="application/json",
@@ -641,9 +642,9 @@ if __name__ == '__main__':
     print('start http server; http://<serverip>:'+str(opt.listenport)+'/'+pagename)
 
     def run_server(runner):
+        global message_queue, loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        global message_queue
         message_queue = asyncio.Queue()
         loop.run_until_complete(runner.setup())
         site = web.TCPSite(runner, '0.0.0.0', opt.listenport)
