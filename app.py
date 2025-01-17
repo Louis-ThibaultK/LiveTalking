@@ -76,14 +76,14 @@ def llm_response(message,nerfreal):
     from openai import OpenAI
     client = OpenAI(
         # 如果您没有配置环境变量，请在此处用您的API Key进行替换
-        api_key=os.getenv("DASHSCOPE_API_KEY"),
+        api_key="ST",
         # 填写DashScope SDK的base_url
         base_url="http://10.176.196.194:11434/v1",
     )
     end = time.perf_counter()
     print(f"llm Time init: {end-start}s")
     completion = client.chat.completions.create(
-        model="qwen-plus",
+        model="qwen2.5:7b",
         messages=[{'role': 'system', 'content': 'You are a helpful assistant.'},
                   {'role': 'user', 'content': message}],
         stream=True,
