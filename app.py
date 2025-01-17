@@ -78,7 +78,7 @@ def llm_response(message,nerfreal):
         # 如果您没有配置环境变量，请在此处用您的API Key进行替换
         api_key=os.getenv("DASHSCOPE_API_KEY"),
         # 填写DashScope SDK的base_url
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        base_url="http://10.176.196.194:11434/v1",
     )
     end = time.perf_counter()
     print(f"llm Time init: {end-start}s")
@@ -357,7 +357,7 @@ async def sst_response():
     response = requests.request("POST", url, headers=headers, data=payload, files=files)
     os.remove("./output.wav")
     print("text:", response.text)
-    return response.textc
+    return response.text
 
 async def process_stream(message_queue, audio_buffer, nerfreals):
     while True:
@@ -573,15 +573,6 @@ if __name__ == '__main__':
 
     parser.add_argument('--max_session', type=int, default=1)  #multi session count
     parser.add_argument('--listenport', type=int, default=8010)
-    # asr
-    ASR_URL = os.getenv('ASR_URL')
-    ASR_MODEL = os.getenv('ASR_MODEL')
-    ASR_LANG = os.getenv('ASR_LANG')
-    ASR_KEY = os.getenv('ASR_KEY')
-    ASR_URL="http://10.218.127.251:3000"
-    ASR_MODEL="SenseVoice"
-    ASR_LANG="auto"
-    ASR_KEY="*********"
 
     opt = parser.parse_args()
     #app.config.from_object(opt)
