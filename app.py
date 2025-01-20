@@ -78,7 +78,7 @@ def llm_response(message,nerfreal):
         # 如果您没有配置环境变量，请在此处用您的API Key进行替换
         api_key="ST",
         # 填写DashScope SDK的base_url
-        base_url="http://10.176.196.194:11434/v1",
+        # base_url="http://10.176.196.194:11434/v1",
         base_url="https://api.chatanywhere.tech/v1",
     )
     end = time.perf_counter()
@@ -339,11 +339,11 @@ async def run(push_url,sessionid):
 
 async def save_audio_to_file(frames, filename):
     with wave.open(filename, 'wb') as wf:
-        wf.setnchannels(2)  # Mono
-        wf.setsampwidth(2)  # 16-bit PCM
-        wf.setframerate(48000)  # Sample rate
+        wf.setnchannels(frames.num_channels)  # Mono
+        wf.setsampwidth(frames.sample_width)  # 16-bit PCM
+        wf.setframerate(frames.sample_rate)  # Sample rate
         # for frame in frames:
-        wf.writeframes(frames)
+        wf.writeframes(frames.get_data())
         print(f"Saved {len(frames)} audio frames to {filename}.")
 
 async def sst_response():
@@ -369,7 +369,7 @@ async def process_stream(message_queue, audio_buffer, nerfreals):
             print("waiting finished")
         finally:
             # # 保存音频数据到文件
-            await save_audio_to_file(audio_buffer.get_data(), "output.wav")
+            await save_audio_to_file(audio_buffer, "output.wav")
             # 调用语音识别
             text = await sst_response()
             sessionid = 0
@@ -403,12 +403,11 @@ async def fetch_stream(pull_url, message_queue, loop):
                 # 将音频帧的数据写入缓冲区
                 if status:
                     audio_data = frame.to_ndarray()  # 获取 NumPy 数组
-                    channels, samples = audio_data.shape
-                    print("track status:", status, channels, samples, frame.sample_rate)
+                    print("track status:", status, frame.layout.channels, frame.sample_rate)
                     audio_buffer.write(
                         audio_data.tobytes(),
-                        2,   # 从帧对象提取通道数
-                        48000,  # 从帧对象提取采样率
+                        frame.layout.channels,   # 从帧对象提取通道数
+                        frame.sample_rate,  # 从帧对象提取采样率
                         2  # 假设 16-bit，每个采样宽度为 2 字节
                     )
         elif track.kind == "video":
