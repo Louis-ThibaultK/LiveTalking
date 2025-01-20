@@ -344,7 +344,7 @@ async def save_audio_to_file(frames, filename):
         wf.setframerate(frames.sample_rate)  # Sample rate
         # for frame in frames:
         wf.writeframes(frames.get_data())
-        print(f"Saved {len(frames)} audio frames to {filename}.")
+        print(f"Saved {len(frames.get_data())} audio frames to {filename}.")
 
 async def sst_response():
     url = "http://10.218.127.29:3000/transcribe"
