@@ -79,11 +79,12 @@ def llm_response(message,nerfreal):
         api_key="ST",
         # 填写DashScope SDK的base_url
         base_url="http://10.176.196.194:11434/v1",
+        base_url="https://api.chatanywhere.tech/v1",
     )
     end = time.perf_counter()
     print(f"llm Time init: {end-start}s")
     completion = client.chat.completions.create(
-        model="qwen2.5:7b",
+        model="gpt-4o",
         messages=[{'role': 'system', 'content': 'You are a helpful assistant.'},
                   {'role': 'user', 'content': message}],
         stream=True,
@@ -338,7 +339,7 @@ async def run(push_url,sessionid):
 
 async def save_audio_to_file(frames, filename):
     with wave.open(filename, 'wb') as wf:
-        wf.setnchannels(1)  # Mono
+        wf.setnchannels(2)  # Mono
         wf.setsampwidth(2)  # 16-bit PCM
         wf.setframerate(48000)  # Sample rate
         # for frame in frames:
