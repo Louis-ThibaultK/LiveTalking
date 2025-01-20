@@ -403,10 +403,10 @@ async def fetch_stream(pull_url, message_queue, loop):
                 # 将音频帧的数据写入缓冲区
                 if status:
                     audio_data = frame.to_ndarray()  # 获取 NumPy 数组
-                    print("track status:", status, frame.layout.channels, frame.sample_rate)
+                    print("track status:", status, len(frame.layout.channels), frame.sample_rate)
                     audio_buffer.write(
                         audio_data.tobytes(),
-                        frame.layout.channels,   # 从帧对象提取通道数
+                        len(frame.layout.channels),   # 从帧对象提取通道数
                         frame.sample_rate,  # 从帧对象提取采样率
                         2  # 假设 16-bit，每个采样宽度为 2 字节
                     )
