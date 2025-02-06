@@ -180,6 +180,10 @@ class AudioBuffer:
     def get_data(self):
         return self.buffer
     
+    def clear_buffer(self):
+        """清理 buffer 内容"""
+        self.buffer = bytearray()
+    
     
 
 class HumanPlayer:

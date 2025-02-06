@@ -371,8 +371,10 @@ async def process_stream(message_queue, audio_buffer, nerfreals):
             msg = await message_queue.get()
             print("waiting finished")
         finally:
-            # # 保存音频数据到文件
+            # 保存音频数据到文件
             await save_audio_to_file(audio_buffer, "output.wav")
+            
+            audio_buffer.clear_buffer()
             # 调用语音识别
             text = await sst_response()
             sessionid = 0
