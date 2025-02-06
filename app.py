@@ -103,6 +103,9 @@ def llm_response(message,nerfreal):
             msg = chunk.choices[0].delta.content
             lastpos=0
             #msglist = re.split('[,.!;:，。！?]',msg)
+            if not msg:
+                print("chunk choices:", chunk.choices)
+                continue
             for i, char in enumerate(msg):
                 if char in ",.!;:，。！？：；" :
                     result = result+msg[lastpos:i+1]
@@ -385,6 +388,7 @@ async def fetch_stream(pull_url, message_queue, loop):
     pcs.add(pc)
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
+
         print("pull Connection state is %s" % pc.connectionState)
         if pc.connectionState == "failed":
             await pc.close()
@@ -392,7 +396,6 @@ async def fetch_stream(pull_url, message_queue, loop):
      
      # 临时音频处理
     audio_buffer = AudioBuffer()
-
     async def on_track(track):
         global status
         if track.kind == "audio":
@@ -403,7 +406,7 @@ async def fetch_stream(pull_url, message_queue, loop):
                 # 将音频帧的数据写入缓冲区
                 if status:
                     audio_data = frame.to_ndarray()  # 获取 NumPy 数组
-                    print("track status:", status, len(frame.layout.channels), frame.sample_rate)
+                    # print("track status:", status, len(frame.layout.channels), frame.sample_rate)
                     audio_buffer.write(
                         audio_data.tobytes(),
                         len(frame.layout.channels),   # 从帧对象提取通道数
