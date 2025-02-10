@@ -263,17 +263,40 @@ class MuseReal(BaseReal):
                                     self.timesteps, 
                                     encoder_hidden_states=audio_feature_batch).sample
         recon = self.vae.decode_latents(pred_latents)
-      
+    
+    # 线性插值
+    def linear_interpolation(frame1, frame2, t):
+        return cv2.addWeighted(frame1, 1 - t, frame2, t, 0)
+    
+    def process_frame(self, combine_frame, video_track, audio_track, loop, audio_frames) :
+        image = combine_frame #(outputs['image'] * 255).astype(np.uint8)
+        new_frame = VideoFrame.from_ndarray(image, format="bgr24")
+        asyncio.run_coroutine_threadsafe(video_track._queue.put(new_frame), loop)
+        self.record_video_data(image)
+        #self.recordq_video.put(new_frame)  
+
+        for audio_frame in audio_frames:
+            frame,type = audio_frame
+            frame = (frame * 32767).astype(np.int16)
+            new_frame = AudioFrame(format='s16', layout='mono', samples=frame.shape[0])
+            new_frame.planes[0].update(frame.tobytes())
+            new_frame.sample_rate=16000
+            # if audio_track._queue.qsize()>10:
+            #     time.sleep(0.1)
+            asyncio.run_coroutine_threadsafe(audio_track._queue.put(new_frame), loop)
+            self.record_audio_data(frame)
+            #self.recordq_audio.put(new_frame)
 
     def process_frames(self,quit_event,loop=None,audio_track=None,video_track=None):
-        
+        combine_frame = np.zeros((512, 512, 3), dtype=np.uint8)
         while not quit_event.is_set():
             try:
                 res_frame,idx,audio_frames = self.res_frame_queue.get(block=True, timeout=1)
             except queue.Empty:
                 continue
             if audio_frames[0][1]!=0 and audio_frames[1][1]!=0: #全为静音数据，只需要取fullimg
-                self.speaking = False
+               
+                pre_combine_frame = combine_frame
                 audiotype = audio_frames[0][1]
                 if self.custom_index.get(audiotype) is not None: #有自定义视频
                     mirindex = self.mirror_index(len(self.custom_img_cycle[audiotype]),self.custom_index[audiotype])
@@ -283,6 +306,16 @@ class MuseReal(BaseReal):
                     #     self.curr_state = 1  #当前视频不循环播放，切换到静音状态
                 else:
                     combine_frame = self.frame_list_cycle[idx]
+
+                if self.speaking:
+                    # 插值因子 t 从 0 到 1
+                    num_interpolated_frames = 10  # 生成 10 个过渡帧
+                    for i in range(1, num_interpolated_frames + 1):
+                        t = i / (num_interpolated_frames + 1)  # t 在 0 到 1 之间
+                        interpolated_frame = self.linear_interpolation(pre_combine_frame, combine_frame, t)
+                        self.process_frame(interpolated_frame, video_track, audio_track, loop, audio_frame)
+
+                self.speaking = False
             else:
                 self.speaking = True
                 bbox = self.coord_list_cycle[idx]
