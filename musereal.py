@@ -269,7 +269,7 @@ class MuseReal(BaseReal):
         return cv2.addWeighted(frame1, 1 - t, frame2, t, 0)
     
     # 光流插值
-    def optical_flow_interpolation(self, frame1, frame2, alpha):
+    def optical_flow_interpolation(self, frame1, frame2, num_interpolated_frames):
 
         # 转换为灰度图像
         gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
@@ -278,30 +278,35 @@ class MuseReal(BaseReal):
         # 计算光流（使用 Farneback 算法）
         flow = cv2.calcOpticalFlowFarneback(gray1, gray2, None, 0.5, 3, 15, 3, 5, 1.2, 0)
 
-        # 计算每个像素的位移
-        h, w = flow.shape[:2]
-        flow_map = np.column_stack(np.meshgrid(np.arange(h), np.arange(w)))
-        displacement = flow_map + flow.reshape((-1, 2))
-
-        # 使用光流位移进行插值
-        interpolated_frame = cv2.remap(frame1, displacement[:, 0].reshape(h, w), displacement[:, 1].reshape(h, w), interpolation=cv2.INTER_LINEAR)
+        # 创建插值帧的列表，先将原始帧添加到列表中
+        interpolated_frames = [frame1]
+        
+        for i in range(1, num_interpolated_frames + 1):
+            # 计算插值因子 alpha (0 到 1)
+            alpha = i / (num_interpolated_frames + 1)
+            
+            # 生成每个像素的新位置
+            h, w = flow.shape[:2]
+            flow_map_x, flow_map_y = np.meshgrid(np.arange(w), np.arange(h))
+            
+            # 将 flow 中的位移与网格相加，得到新的位移
+            displacement = np.column_stack((flow_map_x.flatten(), flow_map_y.flatten())) + flow.reshape((-1, 2))
+            
+            # 将位移重新转换成二维形式
+            displacement_x = displacement[:, 0].reshape(h, w)
+            displacement_y = displacement[:, 1].reshape(h, w)
+            
+            # 根据插值因子生成新的图像
+            interpolated_frame = cv2.remap(frame1, displacement_x.astype(np.float32), displacement_y.astype(np.float32), interpolation=cv2.INTER_LINEAR)
+            
+            # 添加到结果帧列表
+            interpolated_frames.append(interpolated_frame)
+        
+        # 最后添加第二帧
+        interpolated_frames.append(frame2)
 
         return interpolated_frame
 
-    def generate_interpolated_frames(self, frame1, frame2, num_frames):
-        """
-        在两个视频帧之间插入多个帧
-        :param frame1: 第一帧
-        :param frame2: 第二帧
-        :param num_frames: 要插入的帧数
-        :return: 插入的帧列表
-        """
-        frames = []
-        for i in range(1, num_frames + 1):
-            alpha = i / (num_frames + 1)  # 计算每一帧的插值因子
-            interpolated_frame = self.optical_flow_interpolation(frame1, frame2, alpha)
-            frames.append(interpolated_frame)
-        return frames
     
     def process_frame(self, combine_frame, video_track, audio_track, loop, audio_frames) :
         image = combine_frame #(outputs['image'] * 255).astype(np.uint8)
@@ -345,10 +350,12 @@ class MuseReal(BaseReal):
                 if self.speaking:
                     # 插值因子 t 从 0 到 1
                     num_interpolated_frames = 25  # 生成 10 个过渡帧
-                    for i in range(1, num_interpolated_frames + 1):
+                    # for i in range(1, num_interpolated_frames + 1):
                         #t = i / (num_interpolated_frames + 1)  # t 在 0 到 1 之间
                         # interpolated_frame = self.linear_interpolation(pre_combine_frame, combine_frame, t)
-                        interpolated_frame = self.generate_interpolated_frames(pre_combine_frame, combine_frame, num_interpolated_frames)
+                        # self.process_frame(interpolated_frame, video_track, audio_track, loop, audio_frames)
+                    interpolated_frames = self.optical_flow_interpolation(pre_combine_frame, combine_frame, num_interpolated_frames)
+                    for interpolated_frame in interpolated_frames:
                         self.process_frame(interpolated_frame, video_track, audio_track, loop, audio_frames)
 
                 self.speaking = False
