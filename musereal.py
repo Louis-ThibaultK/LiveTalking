@@ -305,7 +305,7 @@ class MuseReal(BaseReal):
         # 最后添加第二帧
         interpolated_frames.append(frame2)
 
-        return interpolated_frame
+        return interpolated_frames
 
     
     def process_frame(self, combine_frame, video_track, audio_track, loop, audio_frames) :
