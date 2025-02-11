@@ -350,13 +350,13 @@ class MuseReal(BaseReal):
                 if self.speaking:
                     # 插值因子 t 从 0 到 1
                     num_interpolated_frames = 25  # 生成 10 个过渡帧
-                    # for i in range(1, num_interpolated_frames + 1):
-                        #t = i / (num_interpolated_frames + 1)  # t 在 0 到 1 之间
-                        # interpolated_frame = self.linear_interpolation(pre_combine_frame, combine_frame, t)
-                        # self.process_frame(interpolated_frame, video_track, audio_track, loop, audio_frames)
-                    interpolated_frames = self.optical_flow_interpolation(pre_combine_frame, combine_frame, num_interpolated_frames)
-                    for interpolated_frame in interpolated_frames:
+                    for i in range(1, num_interpolated_frames + 1):
+                        t = i / (num_interpolated_frames + 1)  # t 在 0 到 1 之间
+                        interpolated_frame = self.linear_interpolation(pre_combine_frame, combine_frame, t)
                         self.process_frame(interpolated_frame, video_track, audio_track, loop, audio_frames)
+                    # interpolated_frames = self.optical_flow_interpolation(pre_combine_frame, combine_frame, num_interpolated_frames)
+                    # for interpolated_frame in interpolated_frames:
+                    #     self.process_frame(interpolated_frame, video_track, audio_track, loop, audio_frames)
 
                 self.speaking = False
             else:
