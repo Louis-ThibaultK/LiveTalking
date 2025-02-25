@@ -16,11 +16,13 @@
 ###############################################################################
 
 import asyncio
+import io
 import json
 import logging
 import threading
 import time
 from typing import Tuple, Dict, Optional, Set, Union
+import wave
 from av.frame import Frame
 from av.packet import Packet
 from av import AudioFrame
@@ -42,7 +44,6 @@ from aiortc import (
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
-from logger import logger as mylogger
 
 
 class PlayerStreamTrack(MediaStreamTrack):
@@ -83,7 +84,7 @@ class PlayerStreamTrack(MediaStreamTrack):
                 self._start = time.time()
                 self._timestamp = 0
                 self.timelist.append(self._start)
-                mylogger.info('video start:%f',self._start)
+                print('video start:',self._start)
             return self._timestamp, VIDEO_TIME_BASE
         else: #audio
             if hasattr(self, "_timestamp"):
@@ -101,7 +102,7 @@ class PlayerStreamTrack(MediaStreamTrack):
                 self._start = time.time()
                 self._timestamp = 0
                 self.timelist.append(self._start)
-                mylogger.info('audio start:%f',self._start)
+                print('audio start:',self._start)
             return self._timestamp, AUDIO_TIME_BASE
 
     async def recv(self) -> Union[Frame, Packet]:
@@ -123,12 +124,10 @@ class PlayerStreamTrack(MediaStreamTrack):
         #             frame = await self._queue.get()
         #     else:
         #         frame = await self._queue.get()
-        frame,eventpoint = await self._queue.get()
+        frame = await self._queue.get()
         pts, time_base = await self.next_timestamp()
         frame.pts = pts
         frame.time_base = time_base
-        if eventpoint:
-            self._player.notify(eventpoint)
         if frame is None:
             self.stop()
             raise Exception
@@ -137,7 +136,7 @@ class PlayerStreamTrack(MediaStreamTrack):
             self.framecount += 1
             self.lasttime = time.perf_counter()
             if self.framecount==100:
-                mylogger.info(f"------actual avg final fps:{self.framecount/self.totaltime:.4f}")
+                print(f"------actual avg final fps:{self.framecount/self.totaltime:.4f}")
                 self.framecount = 0
                 self.totaltime=0
         return frame
@@ -157,6 +156,36 @@ def player_worker_thread(
 ):
     container.render(quit_event,loop,audio_track,video_track)
 
+
+class AudioBuffer:
+    """
+    将接收到的音频数据保存到缓冲区。
+    """
+    def __init__(self):
+        self.buffer = bytearray()
+        self.num_channels = None
+        self.sample_rate = None
+        self.sample_width = None
+
+    def write(self, data, num_channels, sample_rate, sample_width):
+        if self.num_channels is None:
+            self.num_channels = num_channels
+        if self.sample_rate is None:
+            self.sample_rate = sample_rate
+        if self.sample_width is None:
+            self.sample_width = sample_width
+
+        self.buffer.extend(data)
+
+    def get_data(self):
+        return self.buffer
+    
+    def clear_buffer(self):
+        """清理 buffer 内容"""
+        self.buffer = bytearray()
+    
+    
+
 class HumanPlayer:
 
     def __init__(
@@ -175,8 +204,6 @@ class HumanPlayer:
 
         self.__container = nerfreal
 
-    def notify(self,eventpoint):
-        self.__container.notify(eventpoint)
 
     @property
     def audio(self) -> MediaStreamTrack:
@@ -224,4 +251,5 @@ class HumanPlayer:
             self.__container = None
 
     def __log_debug(self, msg: str, *args) -> None:
-        mylogger.debug(f"HumanPlayer {msg}", *args)
+        logger.debug(f"HumanPlayer {msg}", *args)
+

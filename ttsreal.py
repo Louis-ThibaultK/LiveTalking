@@ -14,7 +14,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 ###############################################################################
-from __future__ import annotations
+
 import time
 import numpy as np
 import soundfile as sf
@@ -32,17 +32,12 @@ from io import BytesIO
 from threading import Thread, Event
 from enum import Enum
 
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from basereal import BaseReal
-
-from logger import logger
 class State(Enum):
     RUNNING=0
     PAUSE=1
 
 class BaseTTS:
-    def __init__(self, opt, parent:BaseReal):
+    def __init__(self, opt, parent):
         self.opt=opt
         self.parent = parent
 
@@ -58,9 +53,9 @@ class BaseTTS:
         self.msgqueue.queue.clear()
         self.state = State.PAUSE
 
-    def put_msg_txt(self,msg:str,eventpoint=None): 
+    def put_msg_txt(self,msg): 
         if len(msg)>0:
-            self.msgqueue.put((msg,eventpoint))
+            self.msgqueue.put(msg)
 
     def render(self,quit_event):
         process_thread = Thread(target=self.process_tts, args=(quit_event,))
@@ -74,7 +69,7 @@ class BaseTTS:
             except queue.Empty:
                 continue
             self.txt_to_audio(msg)
-        logger.info('ttsreal thread stop')
+        print('ttsreal thread stop')
     
     def txt_to_audio(self,msg):
         pass
@@ -84,12 +79,12 @@ class BaseTTS:
 class EdgeTTS(BaseTTS):
     def txt_to_audio(self,msg):
         voicename = "zh-CN-YunxiaNeural"
-        text,textevent = msg
+        text = msg
         t = time.time()
         asyncio.new_event_loop().run_until_complete(self.__main(voicename,text))
-        logger.info(f'-------edge tts time:{time.time()-t:.4f}s')
+        print(f'-------edge tts time:{time.time()-t:.4f}s')
         if self.input_stream.getbuffer().nbytes<=0: #edgetts err
-            logger.error('edgetts err!!!!!')
+            print('edgetts err!!!!!')
             return
         
         self.input_stream.seek(0)
@@ -97,13 +92,8 @@ class EdgeTTS(BaseTTS):
         streamlen = stream.shape[0]
         idx=0
         while streamlen >= self.chunk and self.state==State.RUNNING:
-            eventpoint=None
+            self.parent.put_audio_frame(stream[idx:idx+self.chunk])
             streamlen -= self.chunk
-            if idx==0:
-                eventpoint={'status':'start','text':text,'msgenvent':textevent}
-            elif streamlen<self.chunk:
-                eventpoint={'status':'end','text':text,'msgenvent':textevent}
-            self.parent.put_audio_frame(stream[idx:idx+self.chunk],eventpoint)
             idx += self.chunk
         #if streamlen>0:  #skip last frame(not 20ms)
         #    self.queue.put(stream[idx:])
@@ -113,15 +103,15 @@ class EdgeTTS(BaseTTS):
     def __create_bytes_stream(self,byte_stream):
         #byte_stream=BytesIO(buffer)
         stream, sample_rate = sf.read(byte_stream) # [T*sample_rate,] float64
-        logger.info(f'[INFO]tts audio stream {sample_rate}: {stream.shape}')
+        print(f'[INFO]tts audio stream {sample_rate}: {stream.shape}')
         stream = stream.astype(np.float32)
 
         if stream.ndim > 1:
-            logger.info(f'[WARN] audio has {stream.shape[1]} channels, only use the first.')
+            print(f'[WARN] audio has {stream.shape[1]} channels, only use the first.')
             stream = stream[:, 0]
     
         if sample_rate != self.sample_rate and stream.shape[0]>0:
-            logger.info(f'[WARN] audio sample rate is {sample_rate}, resampling into {self.sample_rate}.')
+            print(f'[WARN] audio sample rate is {sample_rate}, resampling into {self.sample_rate}.')
             stream = resampy.resample(x=stream, sr_orig=sample_rate, sr_new=self.sample_rate)
 
         return stream
@@ -142,97 +132,19 @@ class EdgeTTS(BaseTTS):
                 elif chunk["type"] == "WordBoundary":
                     pass
         except Exception as e:
-            logger.exception('edgetts')
-
-###########################################################################################
-class FishTTS(BaseTTS):
-    def txt_to_audio(self,msg): 
-        text,textevent = msg
-        self.stream_tts(
-            self.fish_speech(
-                text,
-                self.opt.REF_FILE,  
-                self.opt.REF_TEXT,
-                "zh", #en args.language,
-                self.opt.TTS_SERVER, #"http://127.0.0.1:5000", #args.server_url,
-            ),
-            msg
-        )
-
-    def fish_speech(self, text, reffile, reftext,language, server_url) -> Iterator[bytes]:
-        start = time.perf_counter()
-        req={
-            'text':text,
-            'reference_id':reffile,
-            'format':'wav',
-            'streaming':True,
-            'use_memory_cache':'on'
-        }
-        try:
-            res = requests.post(
-                f"{server_url}/v1/tts",
-                json=req,
-                stream=True,
-                headers={
-                    "content-type": "application/json",
-                },
-            )
-            end = time.perf_counter()
-            logger.info(f"fish_speech Time to make POST: {end-start}s")
-
-            if res.status_code != 200:
-                logger.error("Error:%s", res.text)
-                return
-                
-            first = True
-        
-            for chunk in res.iter_content(chunk_size=17640): # 1764 44100*20ms*2
-                #print('chunk len:',len(chunk))
-                if first:
-                    end = time.perf_counter()
-                    logger.info(f"fish_speech Time to first chunk: {end-start}s")
-                    first = False
-                if chunk and self.state==State.RUNNING:
-                    yield chunk
-            #print("gpt_sovits response.elapsed:", res.elapsed)
-        except Exception as e:
-            logger.exception('fishtts')
-
-    def stream_tts(self,audio_stream,msg):
-        text,textevent = msg
-        first = True
-        for chunk in audio_stream:
-            if chunk is not None and len(chunk)>0:          
-                stream = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32767
-                stream = resampy.resample(x=stream, sr_orig=44100, sr_new=self.sample_rate)
-                #byte_stream=BytesIO(buffer)
-                #stream = self.__create_bytes_stream(byte_stream)
-                streamlen = stream.shape[0]
-                idx=0
-                while streamlen >= self.chunk:
-                    eventpoint=None
-                    if first:
-                        eventpoint={'status':'start','text':text,'msgenvent':textevent}
-                        first = False
-                    self.parent.put_audio_frame(stream[idx:idx+self.chunk],eventpoint)
-                    streamlen -= self.chunk
-                    idx += self.chunk
-        eventpoint={'status':'end','text':text,'msgenvent':textevent}
-        self.parent.put_audio_frame(np.zeros(self.chunk,np.float32),eventpoint) 
+            print(e)
 
 ###########################################################################################
 class VoitsTTS(BaseTTS):
     def txt_to_audio(self,msg): 
-        text,textevent = msg
         self.stream_tts(
             self.gpt_sovits(
-                text,
+                msg,
                 self.opt.REF_FILE,  
                 self.opt.REF_TEXT,
                 "zh", #en args.language,
                 self.opt.TTS_SERVER, #"http://127.0.0.1:5000", #args.server_url,
-            ),
-            msg
+            )
         )
 
     def gpt_sovits(self, text, reffile, reftext,language, server_url) -> Iterator[bytes]:
@@ -259,45 +171,43 @@ class VoitsTTS(BaseTTS):
                 stream=True,
             )
             end = time.perf_counter()
-            logger.info(f"gpt_sovits Time to make POST: {end-start}s")
+            print(f"gpt_sovits Time to make POST: {end-start}s")
 
             if res.status_code != 200:
-                logger.error("Error:%s", res.text)
+                print("Error:", res.text)
                 return
                 
             first = True
         
             for chunk in res.iter_content(chunk_size=None): #12800 1280 32K*20ms*2
-                logger.info('chunk len:%d',len(chunk))
+                print('chunk len:',len(chunk))
                 if first:
                     end = time.perf_counter()
-                    logger.info(f"gpt_sovits Time to first chunk: {end-start}s")
+                    print(f"gpt_sovits Time to first chunk: {end-start}s")
                     first = False
                 if chunk and self.state==State.RUNNING:
                     yield chunk
             #print("gpt_sovits response.elapsed:", res.elapsed)
         except Exception as e:
-            logger.exception('sovits')
+            print(e)
 
     def __create_bytes_stream(self,byte_stream):
         #byte_stream=BytesIO(buffer)
         stream, sample_rate = sf.read(byte_stream) # [T*sample_rate,] float64
-        logger.info(f'[INFO]tts audio stream {sample_rate}: {stream.shape}')
+        print(f'[INFO]tts audio stream {sample_rate}: {stream.shape}')
         stream = stream.astype(np.float32)
 
         if stream.ndim > 1:
-            logger.info(f'[WARN] audio has {stream.shape[1]} channels, only use the first.')
+            print(f'[WARN] audio has {stream.shape[1]} channels, only use the first.')
             stream = stream[:, 0]
     
         if sample_rate != self.sample_rate and stream.shape[0]>0:
-            logger.info(f'[WARN] audio sample rate is {sample_rate}, resampling into {self.sample_rate}.')
+            print(f'[WARN] audio sample rate is {sample_rate}, resampling into {self.sample_rate}.')
             stream = resampy.resample(x=stream, sr_orig=sample_rate, sr_new=self.sample_rate)
 
         return stream
 
-    def stream_tts(self,audio_stream,msg):
-        text,textevent = msg
-        first = True
+    def stream_tts(self,audio_stream):
         for chunk in audio_stream:
             if chunk is not None and len(chunk)>0:          
                 #stream = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32767
@@ -307,29 +217,21 @@ class VoitsTTS(BaseTTS):
                 streamlen = stream.shape[0]
                 idx=0
                 while streamlen >= self.chunk:
-                    eventpoint=None
-                    if first:
-                        eventpoint={'status':'start','text':text,'msgenvent':textevent}
-                        first = False
-                    self.parent.put_audio_frame(stream[idx:idx+self.chunk],eventpoint)
+                    self.parent.put_audio_frame(stream[idx:idx+self.chunk])
                     streamlen -= self.chunk
-                    idx += self.chunk
-        eventpoint={'status':'end','text':text,'msgenvent':textevent}
-        self.parent.put_audio_frame(np.zeros(self.chunk,np.float32),eventpoint)
+                    idx += self.chunk 
 
 ###########################################################################################
 class CosyVoiceTTS(BaseTTS):
-    def txt_to_audio(self,msg):
-        text,textevent = msg 
+    def txt_to_audio(self,msg): 
         self.stream_tts(
             self.cosy_voice(
-                text,
+                msg,
                 self.opt.REF_FILE,  
                 self.opt.REF_TEXT,
                 "zh", #en args.language,
                 self.opt.TTS_SERVER, #"http://127.0.0.1:5000", #args.server_url,
-            ),
-            msg
+            )
         )
 
     def cosy_voice(self, text, reffile, reftext,language, server_url) -> Iterator[bytes]:
@@ -343,10 +245,10 @@ class CosyVoiceTTS(BaseTTS):
             res = requests.request("GET", f"{server_url}/inference_zero_shot", data=payload, files=files, stream=True)
             
             end = time.perf_counter()
-            logger.info(f"cosy_voice Time to make POST: {end-start}s")
+            print(f"cosy_voice Time to make POST: {end-start}s")
 
             if res.status_code != 200:
-                logger.error("Error:%s", res.text)
+                print("Error:", res.text)
                 return
                 
             first = True
@@ -354,16 +256,14 @@ class CosyVoiceTTS(BaseTTS):
             for chunk in res.iter_content(chunk_size=8820): # 882 22.05K*20ms*2
                 if first:
                     end = time.perf_counter()
-                    logger.info(f"cosy_voice Time to first chunk: {end-start}s")
+                    print(f"cosy_voice Time to first chunk: {end-start}s")
                     first = False
                 if chunk and self.state==State.RUNNING:
                     yield chunk
         except Exception as e:
-            logger.exception('cosyvoice')
+            print(e)
 
-    def stream_tts(self,audio_stream,msg):
-        text,textevent = msg
-        first = True
+    def stream_tts(self,audio_stream):
         for chunk in audio_stream:
             if chunk is not None and len(chunk)>0:          
                 stream = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32767
@@ -373,15 +273,9 @@ class CosyVoiceTTS(BaseTTS):
                 streamlen = stream.shape[0]
                 idx=0
                 while streamlen >= self.chunk:
-                    eventpoint=None
-                    if first:
-                        eventpoint={'status':'start','text':text,'msgenvent':textevent}
-                        first = False
-                    self.parent.put_audio_frame(stream[idx:idx+self.chunk],eventpoint)
+                    self.parent.put_audio_frame(stream[idx:idx+self.chunk])
                     streamlen -= self.chunk
-                    idx += self.chunk
-        eventpoint={'status':'end','text':text,'msgenvent':textevent}
-        self.parent.put_audio_frame(np.zeros(self.chunk,np.float32),eventpoint) 
+                    idx += self.chunk 
 
 ###########################################################################################
 class XTTS(BaseTTS):
@@ -389,17 +283,15 @@ class XTTS(BaseTTS):
         super().__init__(opt,parent)
         self.speaker = self.get_speaker(opt.REF_FILE, opt.TTS_SERVER)
 
-    def txt_to_audio(self,msg):
-        text,textevent = msg  
+    def txt_to_audio(self,msg): 
         self.stream_tts(
             self.xtts(
-                text,
+                msg,
                 self.speaker,
                 "zh-cn", #en args.language,
                 self.opt.TTS_SERVER, #"http://localhost:9000", #args.server_url,
                 "20" #args.stream_chunk_size
-            ),
-            msg
+            )
         )
 
     def get_speaker(self,ref_audio,server_url):
@@ -419,7 +311,7 @@ class XTTS(BaseTTS):
                 stream=True,
             )
             end = time.perf_counter()
-            logger.info(f"xtts Time to make POST: {end-start}s")
+            print(f"xtts Time to make POST: {end-start}s")
 
             if res.status_code != 200:
                 print("Error:", res.text)
@@ -430,16 +322,14 @@ class XTTS(BaseTTS):
             for chunk in res.iter_content(chunk_size=9600): #24K*20ms*2
                 if first:
                     end = time.perf_counter()
-                    logger.info(f"xtts Time to first chunk: {end-start}s")
+                    print(f"xtts Time to first chunk: {end-start}s")
                     first = False
                 if chunk:
                     yield chunk
         except Exception as e:
             print(e)
     
-    def stream_tts(self,audio_stream,msg):
-        text,textevent = msg
-        first = True
+    def stream_tts(self,audio_stream):
         for chunk in audio_stream:
             if chunk is not None and len(chunk)>0:          
                 stream = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32767
@@ -449,12 +339,6 @@ class XTTS(BaseTTS):
                 streamlen = stream.shape[0]
                 idx=0
                 while streamlen >= self.chunk:
-                    eventpoint=None
-                    if first:
-                        eventpoint={'status':'start','text':text,'msgenvent':textevent}
-                        first = False
-                    self.parent.put_audio_frame(stream[idx:idx+self.chunk],eventpoint)
+                    self.parent.put_audio_frame(stream[idx:idx+self.chunk])
                     streamlen -= self.chunk
-                    idx += self.chunk
-        eventpoint={'status':'end','text':text,'msgenvent':textevent}
-        self.parent.put_audio_frame(np.zeros(self.chunk,np.float32),eventpoint)  
+                    idx += self.chunk 

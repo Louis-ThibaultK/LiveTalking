@@ -46,7 +46,6 @@ from av import AudioFrame, VideoFrame
 from basereal import BaseReal
 
 from tqdm import tqdm
-from logger import logger
 
 def load_model():
     # load model weights
@@ -93,7 +92,7 @@ def load_avatar(avatar_id):
 @torch.no_grad()
 def warm_up(batch_size,model):
     # 预热函数
-    logger.info('warmup model...')
+    print('warmup model...')
     vae, unet, pe, timesteps, audio_processor = model
     #batch_size = 16
     #timesteps = torch.tensor([0], device=unet.device)
@@ -111,7 +110,7 @@ def warm_up(batch_size,model):
 
 def read_imgs(img_list):
     frames = []
-    logger.info('reading images...')
+    print('reading images...')
     for img_path in tqdm(img_list):
         frame = cv2.imread(img_path)
         frames.append(frame)
@@ -141,7 +140,7 @@ def inference(render_event,batch_size,input_latent_list_cycle,audio_feat_queue,a
     index = 0
     count=0
     counttime=0
-    logger.info('start inference')
+    print('start inference')
     while render_event.is_set():
         starttime=time.perf_counter()
         try:
@@ -151,8 +150,8 @@ def inference(render_event,batch_size,input_latent_list_cycle,audio_feat_queue,a
         is_all_silence=True
         audio_frames = []
         for _ in range(batch_size*2):
-            frame,type,eventpoint = audio_out_queue.get()
-            audio_frames.append((frame,type,eventpoint))
+            frame,type = audio_out_queue.get()
+            audio_frames.append((frame,type))
             if type==0:
                 is_all_silence=False
         if is_all_silence:
@@ -196,7 +195,7 @@ def inference(render_event,batch_size,input_latent_list_cycle,audio_feat_queue,a
             count += batch_size
             #_totalframe += 1
             if count>=100:
-                logger.info(f"------actual avg infer fps:{count/counttime:.4f}")
+                print(f"------actual avg infer fps:{count/counttime:.4f}")
                 count=0
                 counttime=0
             for i,res_frame in enumerate(recon):
@@ -204,7 +203,7 @@ def inference(render_event,batch_size,input_latent_list_cycle,audio_feat_queue,a
                 res_frame_queue.put((res_frame,__mirror_index(length,index),audio_frames[i*2:i*2+2]))
                 index = index + 1
             #print('total batch time:',time.perf_counter()-starttime)            
-    logger.info('musereal inference processor stop')
+    print('musereal inference processor stop')
 
 class MuseReal(BaseReal):
     @torch.no_grad()
@@ -230,7 +229,7 @@ class MuseReal(BaseReal):
         self.render_event = mp.Event()
 
     def __del__(self):
-        logger.info(f'musereal({self.sessionid}) delete')
+        print(f'musereal({self.sessionid}) delete')
     
 
     def __mirror_index(self, index):
@@ -252,7 +251,7 @@ class MuseReal(BaseReal):
             latent = self.input_latent_list_cycle[idx]
             latent_batch.append(latent)
         latent_batch = torch.cat(latent_batch, dim=0)
-        logger.info('infer=======')
+        print('infer=======')
         # for i, (whisper_batch,latent_batch) in enumerate(gen):
         audio_feature_batch = torch.from_numpy(whisper_batch)
         audio_feature_batch = audio_feature_batch.to(device=self.unet.device,
@@ -264,17 +263,80 @@ class MuseReal(BaseReal):
                                     self.timesteps, 
                                     encoder_hidden_states=audio_feature_batch).sample
         recon = self.vae.decode_latents(pred_latents)
-      
+    
+    # 线性插值
+    def linear_interpolation(self, frame1, frame2, t):
+        return cv2.addWeighted(frame1, 1 - t, frame2, t, 0)
+    
+    # 光流插值
+    def optical_flow_interpolation(self, frame1, frame2, num_interpolated_frames):
+
+        # 转换为灰度图像
+        gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+        gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+
+        # 计算光流（使用 Farneback 算法）
+        flow = cv2.calcOpticalFlowFarneback(gray1, gray2, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+
+        # 创建插值帧的列表，先将原始帧添加到列表中
+        interpolated_frames = [frame1]
+        
+        for i in range(1, num_interpolated_frames + 1):
+            # 计算插值因子 alpha (0 到 1)
+            alpha = i / (num_interpolated_frames + 1)
+            
+            # 生成每个像素的新位置
+            h, w = flow.shape[:2]
+            flow_map_x, flow_map_y = np.meshgrid(np.arange(w), np.arange(h))
+            
+            # 将 flow 中的位移与网格相加，得到新的位移
+            displacement = np.column_stack((flow_map_x.flatten(), flow_map_y.flatten())) + flow.reshape((-1, 2))
+            
+            # 将位移重新转换成二维形式
+            displacement_x = displacement[:, 0].reshape(h, w)
+            displacement_y = displacement[:, 1].reshape(h, w)
+            
+            # 根据插值因子生成新的图像
+            interpolated_frame = cv2.remap(frame1, displacement_x.astype(np.float32), displacement_y.astype(np.float32), interpolation=cv2.INTER_LINEAR)
+            
+            # 添加到结果帧列表
+            interpolated_frames.append(interpolated_frame)
+        
+        # 最后添加第二帧
+        interpolated_frames.append(frame2)
+
+        return interpolated_frames
+
+    
+    def process_frame(self, combine_frame, video_track, audio_track, loop, audio_frames) :
+        image = combine_frame #(outputs['image'] * 255).astype(np.uint8)
+        new_frame = VideoFrame.from_ndarray(image, format="bgr24")
+        asyncio.run_coroutine_threadsafe(video_track._queue.put(new_frame), loop)
+        self.record_video_data(image)
+        #self.recordq_video.put(new_frame)  
+
+        for audio_frame in audio_frames:
+            frame,type = audio_frame
+            frame = (frame * 32767).astype(np.int16)
+            new_frame = AudioFrame(format='s16', layout='mono', samples=frame.shape[0])
+            new_frame.planes[0].update(frame.tobytes())
+            new_frame.sample_rate=16000
+            # if audio_track._queue.qsize()>10:
+            #     time.sleep(0.1)
+            asyncio.run_coroutine_threadsafe(audio_track._queue.put(new_frame), loop)
+            self.record_audio_data(frame)
+            #self.recordq_audio.put(new_frame)
 
     def process_frames(self,quit_event,loop=None,audio_track=None,video_track=None):
-        
+        combine_frame = np.zeros((512, 512, 3), dtype=np.uint8)
         while not quit_event.is_set():
             try:
                 res_frame,idx,audio_frames = self.res_frame_queue.get(block=True, timeout=1)
             except queue.Empty:
                 continue
-            if audio_frames[0][1]!=0 and audio_frames[1][1]!=0: #全为静音数据，只需要取fullimg
-                self.speaking = False
+            if audio_frames[0][1]!=0 and audio_frames[1][1]!=0: #全为静音数据，只需要取fullimg:
+               
+                pre_combine_frame = combine_frame
                 audiotype = audio_frames[0][1]
                 if self.custom_index.get(audiotype) is not None: #有自定义视频
                     mirindex = self.mirror_index(len(self.custom_img_cycle[audiotype]),self.custom_index[audiotype])
@@ -284,6 +346,19 @@ class MuseReal(BaseReal):
                     #     self.curr_state = 1  #当前视频不循环播放，切换到静音状态
                 else:
                     combine_frame = self.frame_list_cycle[idx]
+
+                if self.speaking:
+                    # 插值因子 t 从 0 到 1
+                    num_interpolated_frames = 25  # 生成 10 个过渡帧
+                    for i in range(1, num_interpolated_frames + 1):
+                        t = i / (num_interpolated_frames + 1)  # t 在 0 到 1 之间
+                        interpolated_frame = self.linear_interpolation(pre_combine_frame, combine_frame, t)
+                        self.process_frame(interpolated_frame, video_track, audio_track, loop, audio_frames)
+                    # interpolated_frames = self.optical_flow_interpolation(pre_combine_frame, combine_frame, num_interpolated_frames)
+                    # for interpolated_frame in interpolated_frames:
+                    #     self.process_frame(interpolated_frame, video_track, audio_track, loop, audio_frames)
+
+                self.speaking = False
             else:
                 self.speaking = True
                 bbox = self.coord_list_cycle[idx]
@@ -302,23 +377,22 @@ class MuseReal(BaseReal):
 
             image = combine_frame #(outputs['image'] * 255).astype(np.uint8)
             new_frame = VideoFrame.from_ndarray(image, format="bgr24")
-            asyncio.run_coroutine_threadsafe(video_track._queue.put((new_frame,None)), loop)
+            asyncio.run_coroutine_threadsafe(video_track._queue.put(new_frame), loop)
             self.record_video_data(image)
             #self.recordq_video.put(new_frame)  
 
             for audio_frame in audio_frames:
-                frame,type,eventpoint = audio_frame
+                frame,type = audio_frame
                 frame = (frame * 32767).astype(np.int16)
                 new_frame = AudioFrame(format='s16', layout='mono', samples=frame.shape[0])
                 new_frame.planes[0].update(frame.tobytes())
                 new_frame.sample_rate=16000
                 # if audio_track._queue.qsize()>10:
                 #     time.sleep(0.1)
-                asyncio.run_coroutine_threadsafe(audio_track._queue.put((new_frame,eventpoint)), loop)
+                asyncio.run_coroutine_threadsafe(audio_track._queue.put(new_frame), loop)
                 self.record_audio_data(frame)
-                #self.notify(eventpoint)
                 #self.recordq_audio.put(new_frame)
-        logger.info('musereal process_frames thread stop') 
+        print('musereal process_frames thread stop') 
             
     def render(self,quit_event,loop=None,audio_track=None,video_track=None):
         #if self.opt.asr:
@@ -350,7 +424,7 @@ class MuseReal(BaseReal):
             #     count=0
             #     totaltime=0
             if video_track._queue.qsize()>=1.5*self.opt.batch_size:
-                logger.debug('sleep qsize=%d',video_track._queue.qsize())
+                print('sleep qsize=',video_track._queue.qsize())
                 time.sleep(0.04*video_track._queue.qsize()*0.8)
             # if video_track._queue.qsize()>=5:
             #     print('sleep qsize=',video_track._queue.qsize())
@@ -360,5 +434,5 @@ class MuseReal(BaseReal):
             # if delay > 0:
             #     time.sleep(delay)
         self.render_event.clear() #end infer process render
-        logger.info('musereal thread stop')
+        print('musereal thread stop')
             

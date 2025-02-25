@@ -16,13 +16,17 @@
 ###############################################################################
 
 # server.py
+import queue
+import wave
 from flask import Flask, render_template,send_from_directory,request, jsonify
 from flask_sockets import Sockets
 import base64
+import time
 import json
 #import gevent
 #from gevent import pywsgi
 #from geventwebsocket.handler import WebSocketHandler
+import os
 import re
 import numpy as np
 from threading import Thread,Event
@@ -35,36 +39,96 @@ import aiohttp_cors
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.rtcrtpsender import RTCRtpSender
 from webrtc import HumanPlayer
-from basereal import BaseReal
-from llm import llm_response
+from webrtc import AudioBuffer
 
 import argparse
 import random
+
 import shutil
 import asyncio
 import torch
-from typing import Dict
-from logger import logger
+import requests
 
 
 app = Flask(__name__)
 #sockets = Sockets(app)
-nerfreals:Dict[int, BaseReal] = {} #sessionid:BaseReal
+nerfreals = {}
 opt = None
 model = None
 avatar = None
-        
+status = False
+message_queue = None
+loop= None
+
+
+
+# def llm_response(message):
+#     from llm.LLM import LLM
+#     # llm = LLM().init_model('Gemini', model_path= 'gemini-pro',api_key='Your API Key', proxy_url=None)
+#     # llm = LLM().init_model('ChatGPT', model_path= 'gpt-3.5-turbo',api_key='Your API Key')
+#     llm = LLM().init_model('VllmGPT', model_path= 'THUDM/chatglm3-6b')
+#     response = llm.chat(message)
+#     print(response)
+#     return response
+
+def llm_response(message,nerfreal):
+    start = time.perf_counter()
+    from openai import OpenAI
+    client = OpenAI(
+        # 如果您没有配置环境变量，请在此处用您的API Key进行替换
+        api_key="ST",
+        # 填写DashScope SDK的base_url
+        # base_url="http://10.176.196.194:11434/v1",
+        base_url="https://api.chatanywhere.tech/v1",
+    )
+    end = time.perf_counter()
+    print(f"llm Time init: {end-start}s")
+    completion = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{'role': 'system', 'content': 'You are a helpful assistant.'},
+                  {'role': 'user', 'content': message}],
+        stream=True,
+        # 通过以下设置，在流式输出的最后一行展示token使用信息
+        stream_options={"include_usage": True}
+    )
+    result=""
+    first = True
+    for chunk in completion:
+        if len(chunk.choices)>0:
+            #print(chunk.choices[0].delta.content)
+            if first:
+                end = time.perf_counter()
+                print(f"llm Time to first chunk: {end-start}s")
+                first = False
+            msg = chunk.choices[0].delta.content
+            lastpos=0
+            #msglist = re.split('[,.!;:，。！?]',msg)
+            if not msg:
+                print("chunk choices:", chunk.choices)
+                continue
+            for i, char in enumerate(msg):
+                if char in ",.!;:，。！？：；" :
+                    result = result+msg[lastpos:i+1]
+                    lastpos = i+1
+                    if len(result)>10:
+                        print(result)
+                        nerfreal.put_msg_txt(result)
+                        result=""
+            result = result+msg[lastpos:]
+    end = time.perf_counter()
+    print(f"llm Time to last chunk: {end-start}s")
+    nerfreal.put_msg_txt(result)            
 
 #####webrtc###############################
 pcs = set()
 
-def randN(N)->int:
+def randN(N):
     '''生成长度为 N的随机数 '''
     min = pow(10, N - 1)
     max = pow(10, N)
     return random.randint(min, max - 1)
 
-def build_nerfreal(sessionid:int)->BaseReal:
+def build_nerfreal(sessionid):
     opt.sessionid=sessionid
     if opt.model == 'wav2lip':
         from lipreal import LipReal
@@ -86,10 +150,10 @@ async def offer(request):
     offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
 
     if len(nerfreals) >= opt.max_session:
-        logger.info('reach max session')
+        print('reach max session')
         return -1
     sessionid = randN(6) #len(nerfreals)
-    logger.info('sessionid=%d',sessionid)
+    print('sessionid=',sessionid)
     nerfreals[sessionid] = None
     nerfreal = await asyncio.get_event_loop().run_in_executor(None, build_nerfreal,sessionid)
     nerfreals[sessionid] = nerfreal
@@ -99,7 +163,7 @@ async def offer(request):
 
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
-        logger.info("Connection state is %s" % pc.connectionState)
+        print("Connection state is %s" % pc.connectionState)
         if pc.connectionState == "failed":
             await pc.close()
             pcs.discard(pc)
@@ -151,6 +215,30 @@ async def human(request):
             {"code": 0, "data":"ok"}
         ),
     )
+async def Speaking(request): 
+    params = await request.json()
+    global status, message_queue, loop
+    sessionid = params.get('sessionid',0)
+    if params.get('interrupt'):
+        nerfreals[sessionid].flush_talk()
+    if params['status'] == 'start':
+        status = True
+    else:
+        status = False
+        if params['type']=='echo':
+            asyncio.run_coroutine_threadsafe(message_queue.put("echo"), loop)
+            # message_queue.put("echo")
+        elif params['type'] == 'chat':
+            asyncio.run_coroutine_threadsafe(message_queue.put("chat"), loop)
+            # message_queue.put('chat')
+
+    return web.Response(
+        content_type="application/json",
+        text=json.dumps(
+            {"code": 0, "data":"ok"}
+        ),
+    ) 
+
 
 async def humanaudio(request):
     try:
@@ -228,7 +316,7 @@ async def post(url,data):
             async with session.post(url,data=data) as response:
                 return await response.text()
     except aiohttp.ClientError as e:
-        logger.info(f'Error: {e}')
+        print(f'Error: {e}')
 
 async def run(push_url,sessionid):
     nerfreal = await asyncio.get_event_loop().run_in_executor(None, build_nerfreal,sessionid)
@@ -239,7 +327,7 @@ async def run(push_url,sessionid):
 
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
-        logger.info("Connection state is %s" % pc.connectionState)
+        print("push Connection state is %s" % pc.connectionState)
         if pc.connectionState == "failed":
             await pc.close()
             pcs.discard(pc)
@@ -251,6 +339,103 @@ async def run(push_url,sessionid):
     await pc.setLocalDescription(await pc.createOffer())
     answer = await post(push_url,pc.localDescription.sdp)
     await pc.setRemoteDescription(RTCSessionDescription(sdp=answer,type='answer'))
+
+async def save_audio_to_file(frames, filename):
+    with wave.open(filename, 'wb') as wf:
+        wf.setnchannels(frames.num_channels)  # Mono
+        wf.setsampwidth(frames.sample_width)  # 16-bit PCM
+        wf.setframerate(frames.sample_rate)  # Sample rate
+        # for frame in frames:
+        wf.writeframes(frames.get_data())
+        print(f"Saved {len(frames.get_data())} audio frames to {filename}.")
+
+async def sst_response():
+    url = "http://10.218.127.29:3000/transcribe"
+
+    payload = {'language': 'zn'}
+    files=[
+    ('audio_file',('output.wav',open('./output.wav','rb'),'audio/wav'))
+    ]
+    headers = {}
+
+    response = requests.request("POST", url, headers=headers, data=payload, files=files)
+    os.remove("./output.wav")
+    print("text:", response.text)
+    return response.text
+
+async def process_stream(message_queue, audio_buffer, nerfreals):
+    while True:
+        try:
+            print("Receiving stream...")
+            # asyncio.run_coroutine_threadsafe(message_queue.get(), loop)
+            msg = await message_queue.get()
+            print("waiting finished")
+        finally:
+            # 保存音频数据到文件
+            await save_audio_to_file(audio_buffer, "output.wav")
+            
+            audio_buffer.clear_buffer()
+            # 调用语音识别
+            text = await sst_response()
+            sessionid = 0
+            if msg == 'echo':
+                nerfreals[sessionid].put_msg_txt(text)
+            elif msg == 'chat':
+                res = await asyncio.get_event_loop().run_in_executor(
+                    None, llm_response, text, nerfreals[sessionid]
+                )
+
+async def fetch_stream(pull_url, message_queue, loop):
+    pc = RTCPeerConnection()
+    pcs.add(pc)
+    @pc.on("connectionstatechange")
+    async def on_connectionstatechange():
+
+        print("pull Connection state is %s" % pc.connectionState)
+        if pc.connectionState == "failed":
+            await pc.close()
+            pcs.discard(pc)
+     
+     # 临时音频处理
+    audio_buffer = AudioBuffer()
+    async def on_track(track):
+        global status
+        if track.kind == "audio":
+            print("Audio track received")
+
+            while True:
+                frame = await track.recv()
+                # 将音频帧的数据写入缓冲区
+                if status:
+                    audio_data = frame.to_ndarray()  # 获取 NumPy 数组
+                    # print("track status:", status, len(frame.layout.channels), frame.sample_rate)
+                    audio_buffer.write(
+                        audio_data.tobytes(),
+                        len(frame.layout.channels),   # 从帧对象提取通道数
+                        frame.sample_rate,  # 从帧对象提取采样率
+                        2  # 假设 16-bit，每个采样宽度为 2 字节
+                    )
+        elif track.kind == "video":
+            print("Video track received (ignored)")
+
+    pc.on("track", on_track)
+
+    pc.addTransceiver("audio", direction="recvonly")
+    # 创建 SDP Offer
+    offer = await pc.createOffer()
+    print("offer:", offer)
+    await pc.setLocalDescription(offer)
+
+    # 向 WHEP 服务端发送 SDP Offer
+    answer = await post(pull_url, pc.localDescription.sdp)
+    print("answer:", answer)
+    await pc.setRemoteDescription(RTCSessionDescription(sdp=answer,type='answer'))
+    
+    # process_stream(message_queue, m_stt, audio_buffer, nerfreals)
+    task = loop.create_task(process_stream(message_queue, audio_buffer, nerfreals) )                   
+        #nerfreals[sessionid].put_msg_txt(res)
+
+
 ##########################################
 # os.environ['MKL_SERVICE_FORCE_INTEL'] = '1'
 # os.environ['MULTIPROCESSING_METHOD'] = 'forkserver'                                                    
@@ -388,7 +573,8 @@ if __name__ == '__main__':
     parser.add_argument('--model', type=str, default='ernerf') #musetalk wav2lip
 
     parser.add_argument('--transport', type=str, default='rtcpush') #rtmp webrtc rtcpush
-    parser.add_argument('--push_url', type=str, default='http://localhost:1985/rtc/v1/whip/?app=live&stream=livestream') #rtmp://localhost/live/livestream
+    parser.add_argument('--push_url', type=str, default='http://106.39.219.223:1985/rtc/v1/whip/?app=live&stream=livestream') #rtmp://localhost/live/livestream
+    parser.add_argument('--pull_url', type=str, default='http://106.39.219.223:1985/rtc/v1/whep/?app=live&stream=livestream1')
 
     parser.add_argument('--max_session', type=int, default=1)  #multi session count
     parser.add_argument('--listenport', type=int, default=8010)
@@ -413,7 +599,7 @@ if __name__ == '__main__':
         #     nerfreals.append(nerfreal)
     elif opt.model == 'musetalk':
         from musereal import MuseReal,load_model,load_avatar,warm_up
-        logger.info(opt)
+        print(opt)
         model = load_model()
         avatar = load_avatar(opt.avatar_id) 
         warm_up(opt.batch_size,model)      
@@ -423,17 +609,17 @@ if __name__ == '__main__':
         #     nerfreals.append(nerfreal)
     elif opt.model == 'wav2lip':
         from lipreal import LipReal,load_model,load_avatar,warm_up
-        logger.info(opt)
+        print(opt)
         model = load_model("./models/wav2lip.pth")
         avatar = load_avatar(opt.avatar_id)
-        warm_up(opt.batch_size,model,256)
+        warm_up(opt.batch_size,model,96)
         # for k in range(opt.max_session):
         #     opt.sessionid=k
         #     nerfreal = LipReal(opt,model)
         #     nerfreals.append(nerfreal)
     elif opt.model == 'ultralight':
         from lightreal import LightReal,load_model,load_avatar,warm_up
-        logger.info(opt)
+        print(opt)
         model = load_model(opt)
         avatar = load_avatar(opt.avatar_id)
         warm_up(opt.batch_size,avatar,160)
@@ -443,7 +629,7 @@ if __name__ == '__main__':
         nerfreals[0] = build_nerfreal(0)
         rendthrd = Thread(target=nerfreals[0].render,args=(thread_quit,))
         rendthrd.start()
-
+    
     #############################################################################
     appasync = web.Application()
     appasync.on_shutdown.append(on_shutdown)
@@ -452,7 +638,7 @@ if __name__ == '__main__':
     appasync.router.add_post("/humanaudio", humanaudio)
     appasync.router.add_post("/set_audiotype", set_audiotype)
     appasync.router.add_post("/record", record)
-    appasync.router.add_post("/is_speaking", is_speaking)
+    appasync.router.add_post("/is_speaking", Speaking)
     appasync.router.add_static('/',path='web')
 
     # Configure default CORS settings.
@@ -472,20 +658,26 @@ if __name__ == '__main__':
         pagename='echoapi.html'
     elif opt.transport=='rtcpush':
         pagename='rtcpushapi.html'
-    logger.info('start http server; http://<serverip>:'+str(opt.listenport)+'/'+pagename)
+    print('start http server; http://<serverip>:'+str(opt.listenport)+'/'+pagename)
+
     def run_server(runner):
+        global message_queue, loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        message_queue = asyncio.Queue()
         loop.run_until_complete(runner.setup())
         site = web.TCPSite(runner, '0.0.0.0', opt.listenport)
         loop.run_until_complete(site.start())
         if opt.transport=='rtcpush':
             for k in range(opt.max_session):
                 push_url = opt.push_url
+                pull_url = opt.pull_url
                 if k!=0:
                     push_url = opt.push_url+str(k)
                 loop.run_until_complete(run(push_url,k))
-        loop.run_forever()    
+                loop.run_until_complete(fetch_stream(pull_url, message_queue, loop))
+        loop.run_forever()   
+    
     #Thread(target=run_server, args=(web.AppRunner(appasync),)).start()
     run_server(web.AppRunner(appasync))
 

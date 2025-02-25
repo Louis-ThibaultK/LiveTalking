@@ -32,10 +32,10 @@ class LipASR(BaseASR):
         ############################################## extract audio feature ##############################################
         # get a frame of audio
         for _ in range(self.batch_size*2):
-            frame,type,eventpoint = self.get_audio_frame()
+            frame,type = self.get_audio_frame()
             self.frames.append(frame)
             # put to output
-            self.output_queue.put((frame,type,eventpoint))
+            self.output_queue.put((frame,type))
         # context not enough, do not run network.
         if len(self.frames) <= self.stride_left_size + self.stride_right_size:
             return
